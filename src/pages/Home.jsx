@@ -1,7 +1,40 @@
 import { useState, useEffect } from 'react'
+import { useSelector, useContext } from 'react-redux'
 import MainFeature from '../components/MainFeature'
 import ApperIcon from '../components/ApperIcon'
 import { motion } from 'framer-motion'
+import { AuthContext } from '../App'
+
+// User Profile Component
+function UserProfile() {
+  const { user, isAuthenticated } = useSelector((state) => state.user);
+  const authContext = useContext(AuthContext);
+
+  if (!isAuthenticated || !user) {
+    return (
+      <div className="hidden sm:flex items-center space-x-2 bg-surface-100 dark:bg-surface-800 rounded-lg px-3 py-2">
+        <ApperIcon name="User" className="h-4 w-4 text-surface-600 dark:text-surface-400" />
+        <span className="text-sm text-surface-700 dark:text-surface-300">Guest</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="hidden sm:flex items-center space-x-2 bg-surface-100 dark:bg-surface-800 rounded-lg px-3 py-2">
+      <ApperIcon name="User" className="h-4 w-4 text-surface-600 dark:text-surface-400" />
+      <span className="text-sm text-surface-700 dark:text-surface-300">
+        {user.firstName || user.emailAddress || 'User'}
+      </span>
+      <button
+        onClick={authContext?.logout}
+        className="text-xs text-surface-500 hover:text-surface-700 dark:hover:text-surface-300 ml-2"
+        title="Logout"
+      >
+        <ApperIcon name="LogOut" className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
 
 function Home() {
   const [darkMode, setDarkMode] = useState(false)
@@ -52,10 +85,7 @@ function Home() {
                   className="h-5 w-5" 
                 />
               </button>
-              <div className="hidden sm:flex items-center space-x-2 bg-surface-100 dark:bg-surface-800 rounded-lg px-3 py-2">
-                <ApperIcon name="User" className="h-4 w-4 text-surface-600 dark:text-surface-400" />
-                <span className="text-sm text-surface-700 dark:text-surface-300">John Doe</span>
-              </div>
+              <UserProfile />
             </div>
           </div>
         </div>

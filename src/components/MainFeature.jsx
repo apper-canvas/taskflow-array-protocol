@@ -2,21 +2,26 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'react-toastify'
 import { format, isToday, isPast, differenceInDays } from 'date-fns'
+import { useSelector } from 'react-redux'
 import ApperIcon from './ApperIcon'
+import TaskService from '../services/TaskService'
+import ProjectService from '../services/ProjectService'
 
 function MainFeature() {
   const [tasks, setTasks] = useState([])
-  const [projects, setProjects] = useState([
-    { id: '1', name: 'Personal', color: '#10b981', taskCount: 0 },
-    { id: '2', name: 'Work', color: '#6366f1', taskCount: 0 },
-    { id: '3', name: 'Learning', color: '#ec4899', taskCount: 0 }
-  ])
+  const [projects, setProjects] = useState([])
   const [showTaskModal, setShowTaskModal] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
   const [selectedProject, setSelectedProject] = useState('all')
   const [sortBy, setSortBy] = useState('dueDate')
   const [filterStatus, setFilterStatus] = useState('all')
   const [searchTerm, setSearchTerm] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [projectsLoading, setProjectsLoading] = useState(false)
+  const [tasksLoading, setTasksLoading] = useState(false)
+
+  // Get user info from Redux
+  const user = useSelector((state) => state.user?.user)
 
   const [taskForm, setTaskForm] = useState({
     title: '',
@@ -24,22 +29,80 @@ function MainFeature() {
     priority: 'medium',
     status: 'pending',
     dueDate: '',
-    projectId: '1',
+    projectId: '',
     tags: []
   })
 
-  // Load tasks from localStorage on component mount
+  // Load projects and tasks on component mount
   useEffect(() => {
-    const savedTasks = localStorage.getItem('taskflow-tasks')
-    if (savedTasks) {
-      setTasks(JSON.parse(savedTasks))
-    }
+    loadProjects()
+    loadTasks()
   }, [])
 
-  // Save tasks to localStorage whenever tasks change
+  // Load projects from database
+  const loadProjects = async () => {
+    setProjectsLoading(true)
+    try {
+      const projectsData = await ProjectService.fetchProjects()
+      
+      if (projectsData && projectsData.length > 0) {
+        // Map database projects to UI format
+        const mappedProjects = projectsData.map(project => ({
+          id: project.Id?.toString(),
+          name: project.Name || 'Unnamed Project',
+          color: project.color || '#6366f1',
+          taskCount: 0 // Will be updated when tasks are loaded
+        }))
+        setProjects(mappedProjects)
+        
+        // Set default project for new tasks
+        if (mappedProjects.length > 0 && !taskForm.projectId) {
+          setTaskForm(prev => ({ ...prev, projectId: mappedProjects[0].id }))
+        }
+      } else {
+        // Create default projects if none exist
+        const defaultProjects = [
+          { name: 'Personal', color: '#10b981' },
+          { name: 'Work', color: '#6366f1' },
+          { name: 'Learning', color: '#ec4899' }
+        ]
+        
+        for (const project of defaultProjects) {
+          await ProjectService.createProject(project)
+        }
+        
+        // Reload projects after creating defaults
+        setTimeout(() => loadProjects(), 1000)
+      }
+    } catch (error) {
+      console.error('Error loading projects:', error)
+      // Fallback to default projects for UI
+      setProjects([
+        { id: '1', name: 'Personal', color: '#10b981', taskCount: 0 },
+        { id: '2', name: 'Work', color: '#6366f1', taskCount: 0 },
+        { id: '3', name: 'Learning', color: '#ec4899', taskCount: 0 }
+      ])
+    } finally {
+      setProjectsLoading(false)
+    }
+  }
+
+  // Load tasks from database
+  const loadTasks = async () => {
+    setTasksLoading(true)
+    try {
+      const tasksData = await TaskService.fetchTasks()
+      setTasks(tasksData || [])
+    } catch (error) {
+      console.error('Error loading tasks:', error)
+      setTasks([])
+    } finally {
+      setTasksLoading(false)
+    }
+  }
+
+  // Update project task counts when tasks change
   useEffect(() => {
-    localStorage.setItem('taskflow-tasks', JSON.stringify(tasks))
-    // Update project task counts
     const updatedProjects = projects.map(project => ({
       ...project,
       taskCount: tasks.filter(task => task.projectId === project.id).length
@@ -47,7 +110,7 @@ function MainFeature() {
     setProjects(updatedProjects)
   }, [tasks])
 
-  const handleSubmitTask = (e) => {
+  const handleSubmitTask = async (e) => {
     e.preventDefault()
     
     if (!taskForm.title.trim()) {
@@ -55,23 +118,29 @@ function MainFeature() {
       return
     }
 
-    const taskData = {
-      ...taskForm,
-      id: editingTask ? editingTask.id : Date.now().toString(),
-      createdAt: editingTask ? editingTask.createdAt : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      tags: taskForm.tags.filter(tag => tag.trim())
-    }
+    setLoading(true)
+    try {
+      let result
+      if (editingTask) {
+        result = await TaskService.updateTask(editingTask.id, taskForm)
+        if (result) {
+          setTasks(tasks.map(task => task.id === editingTask.id ? result : task))
+        }
+      } else {
+        result = await TaskService.createTask(taskForm)
+        if (result) {
+          setTasks([...tasks, result])
+        }
+      }
 
-    if (editingTask) {
-      setTasks(tasks.map(task => task.id === editingTask.id ? taskData : task))
-      toast.success('Task updated successfully!')
-    } else {
-      setTasks([...tasks, taskData])
-      toast.success('Task created successfully!')
+      if (result) {
+        resetForm()
+      }
+    } catch (error) {
+      console.error('Error submitting task:', error)
+    } finally {
+      setLoading(false)
     }
-
-    resetForm()
   }
 
   const resetForm = () => {
@@ -81,7 +150,7 @@ function MainFeature() {
       priority: 'medium',
       status: 'pending',
       dueDate: '',
-      projectId: '1',
+      projectId: projects.length > 0 ? projects[0].id : '',
       tags: []
     })
     setEditingTask(null)
@@ -89,24 +158,52 @@ function MainFeature() {
   }
 
   const handleEditTask = (task) => {
-    setTaskForm(task)
+    setTaskForm({
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      status: task.status,
+      dueDate: task.dueDate,
+      projectId: task.projectId,
+      tags: task.tags || []
+    })
     setEditingTask(task)
     setShowTaskModal(true)
   }
 
-  const handleDeleteTask = (taskId) => {
-    setTasks(tasks.filter(task => task.id !== taskId))
-    toast.success('Task deleted successfully!')
+  const handleDeleteTask = async (taskId) => {
+    if (!window.confirm('Are you sure you want to delete this task?')) {
+      return
+    }
+
+    try {
+      const success = await TaskService.deleteTask(taskId)
+      if (success) {
+        setTasks(tasks.filter(task => task.id !== taskId))
+      }
+    } catch (error) {
+      console.error('Error deleting task:', error)
+    }
   }
 
-  const handleToggleStatus = (taskId) => {
-    setTasks(tasks.map(task => {
-      if (task.id === taskId) {
-        const newStatus = task.status === 'completed' ? 'pending' : 'completed'
-        return { ...task, status: newStatus, updatedAt: new Date().toISOString() }
+  const handleToggleStatus = async (taskId) => {
+    const task = tasks.find(t => t.id === taskId)
+    if (!task) return
+
+    const newStatus = task.status === 'completed' ? 'pending' : 'completed'
+    
+    try {
+      const updatedTask = await TaskService.updateTask(taskId, { 
+        ...task, 
+        status: newStatus 
+      })
+      
+      if (updatedTask) {
+        setTasks(tasks.map(t => t.id === taskId ? updatedTask : t))
       }
-      return task
-    }))
+    } catch (error) {
+      console.error('Error updating task status:', error)
+    }
   }
 
   const addTag = (tag) => {
@@ -127,7 +224,7 @@ function MainFeature() {
     .filter(task => {
       if (selectedProject !== 'all' && task.projectId !== selectedProject) return false
       if (filterStatus !== 'all' && task.status !== filterStatus) return false
-      if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false
+      if (searchTerm && !task.title?.toLowerCase().includes(searchTerm.toLowerCase())) return false
       return true
     })
     .sort((a, b) => {
@@ -195,7 +292,9 @@ function MainFeature() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-surface-600 dark:text-surface-400">Total Tasks</p>
-              <p className="text-2xl font-bold text-surface-800 dark:text-surface-200">{stats.total}</p>
+              <p className="text-2xl font-bold text-surface-800 dark:text-surface-200">
+                {tasksLoading ? '...' : stats.total}
+              </p>
             </div>
             <div className="bg-primary-light bg-opacity-20 p-3 rounded-lg">
               <ApperIcon name="List" className="h-5 w-5 text-primary" />
@@ -207,7 +306,9 @@ function MainFeature() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-surface-600 dark:text-surface-400">Completed</p>
-              <p className="text-2xl font-bold text-green-600">{stats.completed}</p>
+              <p className="text-2xl font-bold text-green-600">
+                {tasksLoading ? '...' : stats.completed}
+              </p>
             </div>
             <div className="bg-green-100 p-3 rounded-lg">
               <ApperIcon name="CheckCircle" className="h-5 w-5 text-green-600" />
@@ -219,7 +320,9 @@ function MainFeature() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-surface-600 dark:text-surface-400">Pending</p>
-              <p className="text-2xl font-bold text-yellow-600">{stats.pending}</p>
+              <p className="text-2xl font-bold text-yellow-600">
+                {tasksLoading ? '...' : stats.pending}
+              </p>
             </div>
             <div className="bg-yellow-100 p-3 rounded-lg">
               <ApperIcon name="Clock" className="h-5 w-5 text-yellow-600" />
@@ -231,7 +334,9 @@ function MainFeature() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm text-surface-600 dark:text-surface-400">Overdue</p>
-              <p className="text-2xl font-bold text-red-600">{stats.overdue}</p>
+              <p className="text-2xl font-bold text-red-600">
+                {tasksLoading ? '...' : stats.overdue}
+              </p>
             </div>
             <div className="bg-red-100 p-3 rounded-lg">
               <ApperIcon name="AlertTriangle" className="h-5 w-5 text-red-600" />
@@ -252,10 +357,11 @@ function MainFeature() {
             <div className="mb-6">
               <button
                 onClick={() => setShowTaskModal(true)}
-                className="w-full btn-primary flex items-center justify-center space-x-2"
+                disabled={loading || projectsLoading}
+                className="w-full btn-primary flex items-center justify-center space-x-2 disabled:opacity-50"
               >
                 <ApperIcon name="Plus" className="h-4 w-4" />
-                <span>New Task</span>
+                <span>{loading ? 'Creating...' : 'New Task'}</span>
               </button>
             </div>
 
@@ -278,26 +384,32 @@ function MainFeature() {
                     <span className="text-xs">{tasks.length}</span>
                   </button>
                   
-                  {projects.map(project => (
-                    <button
-                      key={project.id}
-                      onClick={() => setSelectedProject(project.id)}
-                      className={`w-full flex items-center justify-between p-2 rounded-lg text-left transition-colors ${
-                        selectedProject === project.id 
-                          ? 'bg-primary text-white' 
-                          : 'text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-700'
-                      }`}
-                    >
-                      <span className="flex items-center space-x-2">
-                        <div 
-                          className="w-3 h-3 rounded-full" 
-                          style={{ backgroundColor: project.color }}
-                        ></div>
-                        <span>{project.name}</span>
-                      </span>
-                      <span className="text-xs">{project.taskCount}</span>
-                    </button>
-                  ))}
+                  {projectsLoading ? (
+                    <div className="text-sm text-surface-500 dark:text-surface-400 p-2">
+                      Loading projects...
+                    </div>
+                  ) : (
+                    projects.map(project => (
+                      <button
+                        key={project.id}
+                        onClick={() => setSelectedProject(project.id)}
+                        className={`w-full flex items-center justify-between p-2 rounded-lg text-left transition-colors ${
+                          selectedProject === project.id 
+                            ? 'bg-primary text-white' 
+                            : 'text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-700'
+                        }`}
+                      >
+                        <span className="flex items-center space-x-2">
+                          <div 
+                            className="w-3 h-3 rounded-full" 
+                            style={{ backgroundColor: project.color }}
+                          ></div>
+                          <span>{project.name}</span>
+                        </span>
+                        <span className="text-xs">{project.taskCount}</span>
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -357,123 +469,132 @@ function MainFeature() {
 
           {/* Task List */}
           <div className="space-y-4">
-            <AnimatePresence>
-              {filteredTasks.length === 0 ? (
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="text-center py-12"
-                >
-                  <div className="inline-flex items-center justify-center w-16 h-16 bg-surface-100 dark:bg-surface-700 rounded-full mb-4">
-                    <ApperIcon name="CheckSquare" className="h-8 w-8 text-surface-400" />
-                  </div>
-                  <h3 className="text-lg font-medium text-surface-700 dark:text-surface-300 mb-2">No tasks found</h3>
-                  <p className="text-surface-500 dark:text-surface-400 mb-4">
-                    {searchTerm ? 'Try adjusting your search terms' : 'Create your first task to get started'}
-                  </p>
-                  {!searchTerm && (
-                    <button
-                      onClick={() => setShowTaskModal(true)}
-                      className="btn-primary"
-                    >
-                      Create Task
-                    </button>
-                  )}
-                </motion.div>
-              ) : (
-                filteredTasks.map((task, index) => (
-                  <motion.div
-                    key={task.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -20 }}
-                    transition={{ delay: index * 0.05 }}
-                    className="task-card group hover:scale-[1.02] transform transition-all duration-200"
+            {tasksLoading ? (
+              <div className="text-center py-12">
+                <div className="inline-flex items-center justify-center w-16 h-16 bg-surface-100 dark:bg-surface-700 rounded-full mb-4">
+                  <ApperIcon name="Loader" className="h-8 w-8 text-surface-400 animate-spin" />
+                </div>
+                <h3 className="text-lg font-medium text-surface-700 dark:text-surface-300 mb-2">Loading tasks...</h3>
+              </div>
+            ) : (
+              <AnimatePresence>
+                {filteredTasks.length === 0 ? (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="text-center py-12"
                   >
-                    <div className="flex items-start space-x-4">
+                    <div className="inline-flex items-center justify-center w-16 h-16 bg-surface-100 dark:bg-surface-700 rounded-full mb-4">
+                      <ApperIcon name="CheckSquare" className="h-8 w-8 text-surface-400" />
+                    </div>
+                    <h3 className="text-lg font-medium text-surface-700 dark:text-surface-300 mb-2">No tasks found</h3>
+                    <p className="text-surface-500 dark:text-surface-400 mb-4">
+                      {searchTerm ? 'Try adjusting your search terms' : 'Create your first task to get started'}
+                    </p>
+                    {!searchTerm && (
                       <button
-                        onClick={() => handleToggleStatus(task.id)}
-                        className={`mt-1 p-1 rounded-full transition-colors ${
-                          task.status === 'completed' 
-                            ? 'text-green-600 hover:text-green-700' 
-                            : 'text-surface-400 hover:text-primary'
-                        }`}
+                        onClick={() => setShowTaskModal(true)}
+                        className="btn-primary"
                       >
-                        <ApperIcon name={getStatusIcon(task.status)} className="h-5 w-5" />
+                        Create Task
                       </button>
+                    )}
+                  </motion.div>
+                ) : (
+                  filteredTasks.map((task, index) => (
+                    <motion.div
+                      key={task.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -20 }}
+                      transition={{ delay: index * 0.05 }}
+                      className="task-card group hover:scale-[1.02] transform transition-all duration-200"
+                    >
+                      <div className="flex items-start space-x-4">
+                        <button
+                          onClick={() => handleToggleStatus(task.id)}
+                          className={`mt-1 p-1 rounded-full transition-colors ${
+                            task.status === 'completed' 
+                              ? 'text-green-600 hover:text-green-700' 
+                              : 'text-surface-400 hover:text-primary'
+                          }`}
+                        >
+                          <ApperIcon name={getStatusIcon(task.status)} className="h-5 w-5" />
+                        </button>
 
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between mb-2">
-                          <h3 className={`font-medium text-surface-800 dark:text-surface-200 ${
-                            task.status === 'completed' ? 'line-through opacity-60' : ''
-                          }`}>
-                            {task.title}
-                          </h3>
-                          
-                          <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={() => handleEditTask(task)}
-                              className="p-1 text-surface-400 hover:text-primary"
-                            >
-                              <ApperIcon name="Edit3" className="h-4 w-4" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteTask(task.id)}
-                              className="p-1 text-surface-400 hover:text-red-600"
-                            >
-                              <ApperIcon name="Trash2" className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {task.description && (
-                          <p className="text-sm text-surface-600 dark:text-surface-400 mb-3 line-clamp-2">
-                            {task.description}
-                          </p>
-                        )}
-
-                        <div className="flex flex-wrap items-center gap-2 mb-3">
-                          <span className={`priority-badge priority-${task.priority}`}>
-                            <ApperIcon name={getPriorityIcon(task.priority)} className="h-3 w-3 mr-1 inline" />
-                            {task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
-                          </span>
-                          
-                          <span className={`status-badge status-${task.status}`}>
-                            {task.status.charAt(0).toUpperCase() + task.status.slice(1).replace('-', ' ')}
-                          </span>
-
-                          {task.dueDate && (
-                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              isPast(new Date(task.dueDate)) && task.status !== 'completed'
-                                ? 'bg-red-100 text-red-800'
-                                : isToday(new Date(task.dueDate))
-                                ? 'bg-orange-100 text-orange-800'
-                                : 'bg-blue-100 text-blue-800'
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between mb-2">
+                            <h3 className={`font-medium text-surface-800 dark:text-surface-200 ${
+                              task.status === 'completed' ? 'line-through opacity-60' : ''
                             }`}>
-                              <ApperIcon name="Calendar" className="h-3 w-3 mr-1 inline" />
-                              {getDaysUntilDue(task.dueDate)}
+                              {task.title}
+                            </h3>
+                            
+                            <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={() => handleEditTask(task)}
+                                className="p-1 text-surface-400 hover:text-primary"
+                              >
+                                <ApperIcon name="Edit3" className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteTask(task.id)}
+                                className="p-1 text-surface-400 hover:text-red-600"
+                              >
+                                <ApperIcon name="Trash2" className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {task.description && (
+                            <p className="text-sm text-surface-600 dark:text-surface-400 mb-3 line-clamp-2">
+                              {task.description}
+                            </p>
+                          )}
+
+                          <div className="flex flex-wrap items-center gap-2 mb-3">
+                            <span className={`priority-badge priority-${task.priority}`}>
+                              <ApperIcon name={getPriorityIcon(task.priority)} className="h-3 w-3 mr-1 inline" />
+                              {task.priority?.charAt(0).toUpperCase() + task.priority?.slice(1)}
                             </span>
+                            
+                            <span className={`status-badge status-${task.status}`}>
+                              {task.status?.charAt(0).toUpperCase() + task.status?.slice(1).replace('-', ' ')}
+                            </span>
+
+                            {task.dueDate && (
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                isPast(new Date(task.dueDate)) && task.status !== 'completed'
+                                  ? 'bg-red-100 text-red-800'
+                                  : isToday(new Date(task.dueDate))
+                                  ? 'bg-orange-100 text-orange-800'
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}>
+                                <ApperIcon name="Calendar" className="h-3 w-3 mr-1 inline" />
+                                {getDaysUntilDue(task.dueDate)}
+                              </span>
+                            )}
+                          </div>
+
+                          {task.tags && task.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {task.tags.map((tag, index) => (
+                                <span 
+                                  key={index}
+                                  className="px-2 py-1 bg-surface-100 dark:bg-surface-700 text-surface-600 dark:text-surface-400 rounded-md text-xs"
+                                >
+                                  #{tag}
+                                </span>
+                              ))}
+                            </div>
                           )}
                         </div>
-
-                        {task.tags && task.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {task.tags.map((tag, index) => (
-                              <span 
-                                key={index}
-                                className="px-2 py-1 bg-surface-100 dark:bg-surface-700 text-surface-600 dark:text-surface-400 rounded-md text-xs"
-                              >
-                                #{tag}
-                              </span>
-                            ))}
-                          </div>
-                        )}
                       </div>
-                    </div>
-                  </motion.div>
-                ))
-              )}
-            </AnimatePresence>
+                    </motion.div>
+                  ))
+                )}
+              </AnimatePresence>
+            )}
           </div>
         </motion.div>
       </div>
@@ -501,7 +622,8 @@ function MainFeature() {
                   </h2>
                   <button
                     onClick={resetForm}
-                    className="p-2 text-surface-400 hover:text-surface-600 dark:hover:text-surface-300"
+                    disabled={loading}
+                    className="p-2 text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 disabled:opacity-50"
                   >
                     <ApperIcon name="X" className="h-5 w-5" />
                   </button>
@@ -520,6 +642,7 @@ function MainFeature() {
                     className="w-full p-3 border border-surface-300 dark:border-surface-600 rounded-lg bg-white dark:bg-surface-700 text-surface-700 dark:text-surface-300 focus:ring-2 focus:ring-primary focus:border-transparent"
                     placeholder="Enter task title..."
                     required
+                    disabled={loading}
                   />
                 </div>
 
@@ -533,6 +656,7 @@ function MainFeature() {
                     rows={3}
                     className="w-full p-3 border border-surface-300 dark:border-surface-600 rounded-lg bg-white dark:bg-surface-700 text-surface-700 dark:text-surface-300 focus:ring-2 focus:ring-primary focus:border-transparent"
                     placeholder="Enter task description..."
+                    disabled={loading}
                   />
                 </div>
 
@@ -545,6 +669,7 @@ function MainFeature() {
                       value={taskForm.priority}
                       onChange={(e) => setTaskForm({ ...taskForm, priority: e.target.value })}
                       className="w-full p-3 border border-surface-300 dark:border-surface-600 rounded-lg bg-white dark:bg-surface-700 text-surface-700 dark:text-surface-300 focus:ring-2 focus:ring-primary focus:border-transparent"
+                      disabled={loading}
                     >
                       <option value="low">Low</option>
                       <option value="medium">Medium</option>
@@ -561,6 +686,7 @@ function MainFeature() {
                       value={taskForm.status}
                       onChange={(e) => setTaskForm({ ...taskForm, status: e.target.value })}
                       className="w-full p-3 border border-surface-300 dark:border-surface-600 rounded-lg bg-white dark:bg-surface-700 text-surface-700 dark:text-surface-300 focus:ring-2 focus:ring-primary focus:border-transparent"
+                      disabled={loading}
                     >
                       <option value="pending">Pending</option>
                       <option value="in-progress">In Progress</option>
@@ -579,6 +705,7 @@ function MainFeature() {
                       value={taskForm.dueDate}
                       onChange={(e) => setTaskForm({ ...taskForm, dueDate: e.target.value })}
                       className="w-full p-3 border border-surface-300 dark:border-surface-600 rounded-lg bg-white dark:bg-surface-700 text-surface-700 dark:text-surface-300 focus:ring-2 focus:ring-primary focus:border-transparent"
+                      disabled={loading}
                     />
                   </div>
 
@@ -590,6 +717,7 @@ function MainFeature() {
                       value={taskForm.projectId}
                       onChange={(e) => setTaskForm({ ...taskForm, projectId: e.target.value })}
                       className="w-full p-3 border border-surface-300 dark:border-surface-600 rounded-lg bg-white dark:bg-surface-700 text-surface-700 dark:text-surface-300 focus:ring-2 focus:ring-primary focus:border-transparent"
+                      disabled={loading || projectsLoading}
                     >
                       {projects.map(project => (
                         <option key={project.id} value={project.id}>
@@ -615,6 +743,7 @@ function MainFeature() {
                           type="button"
                           onClick={() => removeTag(tag)}
                           className="text-primary hover:text-primary-dark"
+                          disabled={loading}
                         >
                           <ApperIcon name="X" className="h-3 w-3" />
                         </button>
@@ -632,20 +761,26 @@ function MainFeature() {
                         e.target.value = ''
                       }
                     }}
+                    disabled={loading}
                   />
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-surface-200 dark:border-surface-700">
                   <button
                     type="submit"
-                    className="flex-1 btn-primary"
+                    className="flex-1 btn-primary disabled:opacity-50"
+                    disabled={loading}
                   >
-                    {editingTask ? 'Update Task' : 'Create Task'}
+                    {loading 
+                      ? (editingTask ? 'Updating...' : 'Creating...') 
+                      : (editingTask ? 'Update Task' : 'Create Task')
+                    }
                   </button>
                   <button
                     type="button"
                     onClick={resetForm}
                     className="btn-secondary"
+                    disabled={loading}
                   >
                     Cancel
                   </button>
