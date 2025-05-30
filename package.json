@@ -18,7 +18,7 @@
     "autoprefixer": "^10.4.15",
 "framer-motion": "^11.0.0",
     "react-toastify": "^11.0.5",
-"lucide-react": "^0.344.0",
+"lucide-react": "^0.469.0",
     "apexcharts": "^4.7.0",
     "react-apexcharts": "^1.7.0",
     "date-fns": "^4.1.0",
