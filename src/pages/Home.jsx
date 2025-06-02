@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useSelector, useContext } from 'react-redux'
+import { useContext, useEffect, useState } from 'react';
+import { useSelector } from 'react-redux';
 import MainFeature from '../components/MainFeature'
 import ApperIcon from '../components/ApperIcon'
 import { motion } from 'framer-motion'
